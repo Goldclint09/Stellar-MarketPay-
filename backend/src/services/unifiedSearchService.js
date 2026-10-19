@@ -65,7 +65,8 @@ async function searchAll(query, limit = 5, cursor) {
   for (const type of SEARCH_TYPES) {
     const hasMore = results[type].length > safeLimit;
     results[type] = results[type].slice(0, safeLimit);
-    nextOffsets[type] = hasMore ? offsets[type] + safeLimit : null;
+    const nextOffset = offsets[type] + safeLimit;
+    nextOffsets[type] = hasMore && nextOffset <= 1_000_000 ? nextOffset : null;
   }
 
   return {
