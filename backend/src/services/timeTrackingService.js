@@ -78,8 +78,8 @@ async function logTimeEntry({ jobId, freelancerAddress, durationMinutes, descrip
     throw e;
   }
 
-  const minutes = parseInt(durationMinutes, 10);
-  if (!minutes || minutes <= 0) {
+  const minutes = Number(durationMinutes);
+  if (!Number.isInteger(minutes) || minutes <= 0) {
     const e = new Error("durationMinutes must be a positive integer no greater than 1440 (24 h)");
     e.status = 400;
     throw e;
@@ -149,6 +149,24 @@ async function logTimeEntry({ jobId, freelancerAddress, durationMinutes, descrip
       `in a ${WEEKLY_WINDOW_DAYS}-day window; ${loggedMinutes} minutes already logged, ${remaining} remaining`
     );
     e.status = 422;
+    throw e;
+  }
+
+  // Treat each entry as an elapsed-time interval. PostgreSQL timestamptz plus
+  // an interval is based on instants, so an entry that crosses a DST change is
+  // still compared by its actual duration rather than its local wall clock.
+  const { rows: overlappingEntries } = await pool.query(
+    `SELECT id FROM time_entries
+     WHERE job_id = $1
+       AND freelancer_address = $2
+       AND COALESCE(started_at, created_at) < $3::timestamptz + ($4 * INTERVAL '1 minute')
+       AND COALESCE(started_at, created_at) + (duration_minutes * INTERVAL '1 minute') > $3::timestamptz
+     LIMIT 1`,
+    [jobId, freelancerAddress, windowEnd, minutes]
+  );
+  if (overlappingEntries.length) {
+    const e = new Error("Time entry overlaps an existing entry for this job");
+    e.status = 409;
     throw e;
   }
 
