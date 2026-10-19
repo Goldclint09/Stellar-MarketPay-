@@ -25,6 +25,11 @@ const searchRateLimiter = createRateLimiter(120, 1);
  *           type: integer
  *           default: 5
  *         description: Max results per entity type (1-20)
+ *       - in: query
+ *         name: cursor
+ *         schema:
+ *           type: string
+ *         description: Opaque cursor returned by the previous search page
  *     responses:
  *       200:
  *         description: Unified search results
@@ -39,13 +44,22 @@ const searchRateLimiter = createRateLimiter(120, 1);
  *                   type: array
  *                 proposals:
  *                   type: array
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     limit:
+ *                       type: integer
+ *                     nextCursor:
+ *                       type: string
+ *                       nullable: true
  */
 router.get("/", searchRateLimiter, async (req, res, next) => {
   try {
     const query = req.query.q || req.query.search || "";
     const limit = req.query.limit ? parseInt(req.query.limit, 10) : 5;
+    const cursor = req.query.cursor;
 
-    const results = await searchAll(query, limit);
+    const results = await searchAll(query, limit, cursor);
     return res.json(results);
   } catch (err) {
     next(err);

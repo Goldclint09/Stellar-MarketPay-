@@ -10,7 +10,34 @@ const pool = require("../db/pool");
  * @param {number} [limit=5] - Maximum items to return per entity type
  * @returns {Promise<{ jobs: Array, freelancers: Array, proposals: Array }>}
  */
-async function searchAll(query, limit = 5) {
+const SEARCH_TYPES = ["jobs", "freelancers", "proposals"];
+
+function decodeCursor(cursor) {
+  if (cursor == null || cursor === "") {
+    return { jobs: 0, freelancers: 0, proposals: 0 };
+  }
+
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (!decoded || SEARCH_TYPES.some((type) =>
+      !(type in decoded) ||
+      (decoded[type] !== null && (!Number.isSafeInteger(decoded[type]) || decoded[type] < 0 || decoded[type] > 1_000_000))
+    )) {
+      throw new Error("invalid cursor state");
+    }
+    return Object.fromEntries(SEARCH_TYPES.map((type) => [type, decoded[type]]));
+  } catch {
+    const error = new Error("cursor must be a valid search cursor");
+    error.status = 400;
+    throw error;
+  }
+}
+
+function encodeCursor(offsets) {
+  return Buffer.from(JSON.stringify(offsets), "utf8").toString("base64url");
+}
+
+async function searchAll(query, limit = 5, cursor) {
   if (!query || typeof query !== "string" || !query.trim()) {
     return { jobs: [], freelancers: [], proposals: [] };
   }
@@ -19,22 +46,40 @@ async function searchAll(query, limit = 5) {
   const safeLimit = Number.isInteger(limit)
     ? Math.min(Math.max(limit, 1), 20)
     : 5;
+  const offsets = decodeCursor(cursor);
 
   const [jobsRes, freelancersRes, proposalsRes] = await Promise.allSettled([
-    searchJobs(cleanQuery, safeLimit),
-    searchFreelancers(cleanQuery, safeLimit),
-    searchProposals(cleanQuery, safeLimit),
+    offsets.jobs === null ? [] : searchJobs(cleanQuery, safeLimit + 1, offsets.jobs),
+    offsets.freelancers === null ? [] : searchFreelancers(cleanQuery, safeLimit + 1, offsets.freelancers),
+    offsets.proposals === null ? [] : searchProposals(cleanQuery, safeLimit + 1, offsets.proposals),
   ]);
 
-  return {
+  const results = {
     jobs: jobsRes.status === "fulfilled" ? jobsRes.value : [],
     freelancers:
       freelancersRes.status === "fulfilled" ? freelancersRes.value : [],
     proposals: proposalsRes.status === "fulfilled" ? proposalsRes.value : [],
   };
+
+  const nextOffsets = {};
+  for (const type of SEARCH_TYPES) {
+    const hasMore = results[type].length > safeLimit;
+    results[type] = results[type].slice(0, safeLimit);
+    nextOffsets[type] = hasMore ? offsets[type] + safeLimit : null;
+  }
+
+  return {
+    ...results,
+    pagination: {
+      limit: safeLimit,
+      nextCursor: SEARCH_TYPES.some((type) => nextOffsets[type] !== null)
+        ? encodeCursor(nextOffsets)
+        : null,
+    },
+  };
 }
 
-async function searchJobs(query, limit) {
+async function searchJobs(query, limit, offset = 0) {
   const sql = `
     SELECT 
       id,
@@ -54,10 +99,10 @@ async function searchJobs(query, limit) {
     WHERE 
       deleted_at IS NULL
       AND COALESCE(search_vector, to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(description, ''))) @@ plainto_tsquery('english', $1)
-    ORDER BY rank DESC, created_at DESC
-    LIMIT $2
+    ORDER BY rank DESC, created_at DESC, id DESC
+    LIMIT $2 OFFSET $3
   `;
-  const { rows } = await pool.query(sql, [query, limit]);
+  const { rows } = await pool.query(sql, [query, limit, offset]);
   return rows.map((r) => ({
     id: String(r.id),
     title: r.title,
@@ -72,7 +117,7 @@ async function searchJobs(query, limit) {
   }));
 }
 
-async function searchFreelancers(query, limit) {
+async function searchFreelancers(query, limit, offset = 0) {
   const sql = `
     SELECT 
       public_key AS "publicKey",
@@ -92,10 +137,10 @@ async function searchFreelancers(query, limit) {
       (deletion_status IS NULL OR deletion_status = 'active')
       AND role IN ('freelancer', 'both')
       AND to_tsvector('english', COALESCE(display_name, '') || ' ' || COALESCE(bio, '') || ' ' || COALESCE(public_key, '') || ' ' || COALESCE(array_to_string(skills, ' '), '')) @@ plainto_tsquery('english', $1)
-    ORDER BY rank DESC, rating DESC NULLS LAST, completed_jobs DESC
-    LIMIT $2
+    ORDER BY rank DESC, rating DESC NULLS LAST, completed_jobs DESC, public_key ASC
+    LIMIT $2 OFFSET $3
   `;
-  const { rows } = await pool.query(sql, [query, limit]);
+  const { rows } = await pool.query(sql, [query, limit, offset]);
   return rows.map((r) => ({
     publicKey: r.publicKey,
     displayName: r.displayName || r.publicKey,
@@ -109,7 +154,7 @@ async function searchFreelancers(query, limit) {
   }));
 }
 
-async function searchProposals(query, limit) {
+async function searchProposals(query, limit, offset = 0) {
   const sql = `
     SELECT 
       id,
@@ -129,10 +174,10 @@ async function searchProposals(query, limit) {
     FROM dao_proposals
     WHERE 
       to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(description, '')) @@ plainto_tsquery('english', $1)
-    ORDER BY rank DESC, created_at DESC
-    LIMIT $2
+    ORDER BY rank DESC, created_at DESC, id DESC
+    LIMIT $2 OFFSET $3
   `;
-  const { rows } = await pool.query(sql, [query, limit]);
+  const { rows } = await pool.query(sql, [query, limit, offset]);
   return rows.map((r) => ({
     id: String(r.id),
     title: r.title,
@@ -153,4 +198,6 @@ module.exports = {
   searchJobs,
   searchFreelancers,
   searchProposals,
+  encodeCursor,
+  decodeCursor,
 };

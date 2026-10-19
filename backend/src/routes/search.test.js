@@ -143,7 +143,7 @@ describe("Unified Search API & Service", () => {
       expect(sql).toContain("ts_rank");
       expect(sql).toContain("plainto_tsquery('english', $1)");
       expect(sql).toContain("LIMIT $2");
-      expect(params).toEqual(["stellar rust", 5]);
+      expect(params).toEqual(["stellar rust", 6, 0]);
     });
 
     it("uses tsvector and ts_rank with plainto_tsquery for freelancers", async () => {
@@ -157,7 +157,7 @@ describe("Unified Search API & Service", () => {
       expect(sql).toContain("plainto_tsquery('english', $1)");
       expect(sql).toContain("role IN ('freelancer', 'both')");
       expect(sql).toContain("LIMIT $2");
-      expect(params).toEqual(["alice", 5]);
+      expect(params).toEqual(["alice", 6, 0]);
     });
 
     it("uses tsvector and ts_rank with plainto_tsquery for DAO proposals", async () => {
@@ -170,7 +170,7 @@ describe("Unified Search API & Service", () => {
       expect(sql).toContain("ts_rank");
       expect(sql).toContain("plainto_tsquery('english', $1)");
       expect(sql).toContain("LIMIT $2");
-      expect(params).toEqual(["treasury audit", 5]);
+      expect(params).toEqual(["treasury audit", 6, 0]);
     });
 
     it("handles database errors gracefully in searchAll without failing the whole request", async () => {
